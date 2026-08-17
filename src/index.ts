@@ -1395,12 +1395,24 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // Start the server
 async function main() {
-  // Load saved credentials on startup
-  await initializeCredentials();
-  
+  // Invariant: stdio transport must connect BEFORE any network I/O.
+  // initializeCredentials() may block on a slow Google OAuth refresh; if that
+  // runs first, Claude Code's MCP registration times out and the session loses
+  // all tasks tools. tools/list doesn't need credentials — tool handlers call
+  // ensureValidToken() lazily on each invocation. Do not reorder.
+  //
+  // This server awaited initializeCredentials() ahead of connect() until
+  // 2026-08-17, alone among the four — gmail, calendar and sheets have carried
+  // this invariant in a comment for months. Found by an out-of-family review
+  // that read past saveCredentials(), which is the only function the same-day
+  // credential fix had compared across the four.
+  const t0 = Date.now();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Google Tasks MCP Server running on stdio");
+  console.error(`google-tasks MCP stdio connected in ${Date.now() - t0}ms`);
+  initializeCredentials()
+    .then(() => console.error(`google-tasks MCP credentials ready in ${Date.now() - t0}ms (authed=${credentials !== null})`))
+    .catch((e) => console.error(`google-tasks MCP background cred init failed: ${e?.message}`));
 }
 
 main().catch((error) => {
