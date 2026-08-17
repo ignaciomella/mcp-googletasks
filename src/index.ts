@@ -146,11 +146,14 @@ async function initializeCredentials(): Promise<void> {
     
     // Try to refresh token if it's expired
     try {
+      // No save here on purpose. ensureValidToken() already persists whenever it
+      // actually refreshes; saving again writes byte-identical content on EVERY
+      // spawn, and this server is spawned and hard-killed many times a day. Each
+      // redundant write is another chance to be killed between writeFile and
+      // rename, i.e. another orphaned credentials.json.tmp.* holding a live
+      // refresh token at rest. Removed 2026-08-17 across all four servers;
+      // orphan production now tracks actual refreshes (~hourly), not spawns.
       await ensureValidToken();
-      // Save updated credentials if they were refreshed
-      if (credentials) {
-        await saveCredentials(credentials);
-      }
     } catch (error: any) {
       // Only wipe credentials on definitive auth revocation (invalid_grant).
       // Transient errors (network, timeout, 5xx) should NOT destroy saved creds.
