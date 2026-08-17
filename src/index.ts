@@ -159,13 +159,23 @@ async function initializeCredentials(): Promise<void> {
         || error?.code === 401;
 
       if (isAuthRevoked) {
-        console.error('Refresh token revoked — clearing credentials:', error?.message);
+        // Drop the grant from THIS process's memory only — never delete the file.
+        // credentials.json is a shared contract, not private state: external jobs
+        // read these files directly (comunidadfeliz-statement-watch reads this
+        // very one), and their error handling keys on Google's honest
+        // `invalid_grant`. Unlinking downgrades that accurate "re-authenticate me"
+        // signal to a bare ENOENT, which reads as "never set up", and destroys the
+        // only on-disk record of the grant.
+        //
+        // The gmail server did exactly this on 2026-08-16 at ~19:29 after a
+        // password change, breaking five cron jobs that had been reporting the
+        // revocation correctly for six hours. Same branch, same hazard here.
+        // Unlink removed 2026-08-17.
+        //
+        // Leaving a stale file costs nothing — loadCredentials() reads it, the
+        // refresh fails the same way, and re-authenticating overwrites it.
+        console.error('Refresh token revoked — cleared in memory, file left intact for re-auth:', error?.message);
         credentials = null;
-        try {
-          await fs.unlink(getCredentialsPath());
-        } catch {
-          // Ignore errors deleting file
-        }
       } else {
         // Keep credentials in memory (and on disk) — the refresh token is likely still valid.
         // The next API call will retry via ensureValidToken().
