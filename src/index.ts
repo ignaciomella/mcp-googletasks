@@ -90,17 +90,28 @@ function getCredentialsPath(): string {
   return path.join(configDir, 'credentials.json');
 }
 
-// Save credentials to disk
+// Save credentials to disk — atomic + empty-guarded, same as the gmail server. Writing
+// straight over credentials.json truncates it to 0 bytes if the process is killed
+// mid-write, and a 0-byte token reads as "never authenticated" — silent, with no error
+// anywhere. That is the 2026-05-06 wipe, which recurred in the calendar (2026-08-15) and
+// sheets (2026-08-12) servers. This one had not been hit yet; it had the same hole.
 async function saveCredentials(creds: StoredCredentials): Promise<void> {
   try {
+    if (!creds || (!creds.refresh_token && !creds.access_token)) {
+      console.error('Refusing to save empty credentials');
+      return;
+    }
     const credsPath = getCredentialsPath();
     const credsDir = path.dirname(credsPath);
-    
+
     // Ensure directory exists
     await fs.mkdir(credsDir, { recursive: true });
-    
-    // Save credentials (with restricted permissions)
-    await fs.writeFile(credsPath, JSON.stringify(creds, null, 2), { mode: 0o600 });
+
+    // Write to a temp file first, then rename — rename is atomic, so a reader never
+    // observes a partial file and a kill can only leave a stray .tmp behind.
+    const tmpPath = `${credsPath}.tmp.${process.pid}.${Date.now()}`;
+    await fs.writeFile(tmpPath, JSON.stringify(creds, null, 2), { mode: 0o600 });
+    await fs.rename(tmpPath, credsPath);
   } catch (error) {
     console.error('Error saving credentials:', error);
     // Don't throw - authentication should still work even if save fails
